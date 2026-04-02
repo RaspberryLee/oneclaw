@@ -342,6 +342,57 @@ function createExtractTmpDir(cacheDir, targetId) {
   return tmpDir;
 }
 
+// 解压 tgz：Windows 优先兼容 GNU tar，若宿主是 bsdtar 则自动回退到普通参数。
+function extractTgzWithHostTar(archivePath, extractDir) {
+  const isWin = process.platform === "win32";
+  const normalizedArchive = isWin ? archivePath.replace(/\\/g, "/") : archivePath;
+  const normalizedExtractDir = isWin ? extractDir.replace(/\\/g, "/") : extractDir;
+  const commands = isWin
+    ? [
+        `tar --force-local -xzf "${normalizedArchive}" -C "${normalizedExtractDir}"`,
+        `tar -xzf "${normalizedArchive}" -C "${normalizedExtractDir}"`,
+      ]
+    : [`tar -xzf "${normalizedArchive}" -C "${normalizedExtractDir}"`];
+
+  let lastError = null;
+
+  for (let index = 0; index < commands.length; index++) {
+    try {
+      execSync(commands[index], { stdio: "pipe", encoding: "utf8" });
+      return;
+    } catch (err) {
+      lastError = err;
+      const stderr = typeof err?.stderr === "string"
+        ? err.stderr
+        : err?.stderr
+          ? String(err.stderr)
+          : "";
+      const stdout = typeof err?.stdout === "string"
+        ? err.stdout
+        : err?.stdout
+          ? String(err.stdout)
+          : "";
+      const combined = `${stderr}${stdout}`;
+      const canFallback =
+        isWin &&
+        index === 0 &&
+        /force-local is not supported/i.test(combined);
+
+      if (canFallback) {
+        log("检测到宿主 tar 不支持 --force-local，回退到兼容参数重试...");
+        continue;
+      }
+
+      if (combined) {
+        process.stderr.write(combined);
+      }
+      throw err;
+    }
+  }
+
+  throw lastError || new Error(`解压失败: ${archivePath}`);
+}
+
 // macOS: 从 tar.gz 中提取 node 二进制和 npm
 function extractDarwin(tarPath, runtimeDir, version, arch, targetId) {
   log("正在解压 macOS Node.js 运行时...");
@@ -1465,12 +1516,7 @@ async function bundlePlugin(plugin, gatewayDir, targetId, opts) {
   let extracted = false;
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      // Windows: --force-local 防止冒号被当作远程主机分隔符；路径转正斜杠防止 GNU tar 解析失败
-      const isWin = process.platform === "win32";
-      const forceLocal = isWin ? " --force-local" : "";
-      const archivePath = isWin ? source.archivePath.replace(/\\/g, "/") : source.archivePath;
-      const extractDir = isWin ? tmpDir.replace(/\\/g, "/") : tmpDir;
-      execSync(`tar${forceLocal} -xzf "${archivePath}" -C "${extractDir}"`, { stdio: "inherit" });
+      extractTgzWithHostTar(source.archivePath, tmpDir);
       extracted = true;
       break;
     } catch (err) {

@@ -31,10 +31,10 @@ mac:
   gatekeeperAssess: false
   notarize: true
 
-# 自动更新：指向阿里云 CDN
+# 自动更新：本地测试时指向本机静态更新源
 publish:
   provider: generic
-  url: https://oneclaw.cn/releases/
+  url: http://127.0.0.1:8080/releases/
 
 dmg:
   sign: false
